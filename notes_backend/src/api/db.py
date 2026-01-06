@@ -1,5 +1,6 @@
 import os
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import pymysql
 from pymysql.connections import Connection
@@ -15,6 +16,40 @@ def _env_int(name: str, default: int) -> int:
         raise RuntimeError(f"Invalid integer for env var {name}: {value}") from exc
 
 
+def _parse_mysql_url(mysql_url: str) -> Dict[str, Any]:
+    """Parse MYSQL_URL into connection parts.
+
+    Accepts:
+      - "mysql://user:pass@host:port/db"
+      - "mysql+pymysql://user:pass@host:port/db"
+      - "host" (treated as host override)
+
+    Returns:
+        dict: Any of {"host","port","user","password","db"} present in the URL.
+    """
+    mysql_url = (mysql_url or "").strip()
+    if not mysql_url:
+        return {}
+
+    # If it's not a URL, treat it as a host override.
+    if "://" not in mysql_url:
+        return {"host": mysql_url}
+
+    parsed = urlparse(mysql_url)
+    scheme = (parsed.scheme or "").lower()
+    if not (scheme.startswith("mysql")):
+        return {}
+
+    db_name = (parsed.path or "").lstrip("/") or None
+    return {
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "user": parsed.username,
+        "password": parsed.password,
+        "db": db_name,
+    }
+
+
 # PUBLIC_INTERFACE
 def get_connection() -> Connection:
     """Create and return a new MySQL connection.
@@ -23,7 +58,7 @@ def get_connection() -> Connection:
     `database/db_connection.txt` per project instructions.
 
     Env vars used (database container provides these names):
-      - MYSQL_URL (optional host override)
+      - MYSQL_URL (may be a full mysql:// URL or a host override)
       - MYSQL_USER
       - MYSQL_PASSWORD
       - MYSQL_DB
@@ -35,12 +70,36 @@ def get_connection() -> Connection:
     Raises:
         RuntimeError: If connection cannot be established.
     """
-    # Prefer MYSQL_URL if present; otherwise use localhost.
-    host = os.getenv("MYSQL_URL") or os.getenv("MYSQL_HOST") or "localhost"
-    user = os.getenv("MYSQL_USER") or "appuser"
-    password = os.getenv("MYSQL_PASSWORD") or "dbuser123"
-    db_name = os.getenv("MYSQL_DB") or "myapp"
-    port = _env_int("MYSQL_PORT", 5000)
+    # Defaults aligned with database/db_connection.txt
+    defaults = {"host": "localhost", "port": 5000, "user": "appuser", "password": "dbuser123", "db": "myapp"}
+
+    # Allow MYSQL_URL to be either a full URL or a simple host override.
+    parsed_from_url = _parse_mysql_url(os.getenv("MYSQL_URL", ""))
+
+    host = (
+        os.getenv("MYSQL_HOST")
+        or parsed_from_url.get("host")
+        or defaults["host"]
+    )
+    user = (
+        os.getenv("MYSQL_USER")
+        or parsed_from_url.get("user")
+        or defaults["user"]
+    )
+    password = (
+        os.getenv("MYSQL_PASSWORD")
+        or parsed_from_url.get("password")
+        or defaults["password"]
+    )
+    db_name = (
+        os.getenv("MYSQL_DB")
+        or parsed_from_url.get("db")
+        or defaults["db"]
+    )
+
+    # Port precedence: explicit env > url port > default.
+    port_env = os.getenv("MYSQL_PORT")
+    port = _env_int("MYSQL_PORT", defaults["port"]) if port_env is not None else int(parsed_from_url.get("port") or defaults["port"])
 
     try:
         return pymysql.connect(
