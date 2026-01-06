@@ -1,3 +1,4 @@
+import os
 from typing import List
 
 from fastapi import FastAPI, HTTPException
@@ -24,11 +25,19 @@ app = FastAPI(
     openapi_tags=openapi_tags,
 )
 
-# CORS: allow the React dev server (port 3000).
-# NOTE: If deployed elsewhere, add the production origin via an env var and include it here.
+# CORS: allow the React dev server (port 3000) and the hosted frontend origin.
+# This environment already provides ALLOWED_ORIGINS via the project manifest.
+_allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "").strip()
+allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()] if _allowed_origins_raw else []
+
+# Always include local dev defaults.
+for origin in ("http://localhost:3000", "http://localhost:4000"):
+    if origin not in allowed_origins:
+        allowed_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
